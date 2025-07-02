@@ -2,7 +2,7 @@
 Script to generate a Mermaid diagram from a CSV file containing 'from' and 'to' node flows.
 
 Usage:
-    python create-diag.py [input_csv] [output_file] [collapse_threshold]
+    python create-diag.py [input_csv] [output_file] [-n COLLAPSE_THRESHOLD]
 If output_file is omitted, the diagram is printed to stdout.
 """
 import csv
@@ -11,6 +11,7 @@ import os
 import sys
 from typing import List, Tuple, Optional, Dict
 from collections import defaultdict
+import argparse
 
 
 def setup_logging() -> None:
@@ -198,12 +199,12 @@ def print_usage() -> None:
     """
     print(
         """
-Usage: python create-diag.py [input_csv] [output_file] [collapse_threshold]
+Usage: python create-diag.py [input_csv] [output_file] [-n COLLAPSE_THRESHOLD]
 
 Arguments:
   input_csv           Path to the CSV file (default: from_to.csv)
   output_file         Path to output file (default: stdout)
-  collapse_threshold  Number of hosts to trigger collapsing (default: 5)
+  -n, --number        Number of hosts to trigger collapsing (default: 5)
         """
     )
 
@@ -211,27 +212,46 @@ Arguments:
 def main() -> None:
     """
     Main function to read CSV and output Mermaid diagram.
-    Accepts an optional collapse threshold argument.
+    Accepts an optional collapse threshold argument as a flag.
     """
     setup_logging()
-    if any(arg in ("-h", "--help") for arg in sys.argv):
-        print_usage()
-        sys.exit(0)
-    input_csv: str = sys.argv[1] if len(sys.argv) > 1 else os.getenv('FROM_TO_CSV', 'from_to.csv')
-    output_file: Optional[str] = sys.argv[2] if len(sys.argv) > 2 else None
+    parser = argparse.ArgumentParser(
+        description="Generate a Mermaid diagram from a CSV of node flows.",
+        add_help=False,
+        usage="python create-diag.py [input_csv] [output_file] [-n COLLAPSE_THRESHOLD]"
+    )
+    parser.add_argument('input_csv', nargs='?', default=os.getenv('FROM_TO_CSV', 'from_to.csv'), help='Path to the CSV file (default: from_to.csv)')
+    parser.add_argument('output_file', nargs='?', default=None, help='Path to output file (default: stdout)')
+    parser.add_argument('-n', '--number', type=int, default=5, help='Number of hosts to trigger collapsing (default: 5)')
+    parser.add_argument('-h', '--help', action='store_true', help='Show this help message and exit')
     try:
-        collapse_threshold: int = int(sys.argv[3]) if len(sys.argv) > 3 else 5
-    except ValueError:
-        print_usage()
-        logging.error("Collapse threshold must be an integer.")
-        sys.exit(1)
-    if len(sys.argv) > 4:
+        args = parser.parse_args()
+    except Exception:
         print_usage()
         sys.exit(1)
 
+    if args.help:
+        print_usage()
+        sys.exit(0)
+
+    input_csv = args.input_csv
+    output_file = args.output_file
+    collapse_threshold = args.number
+
     logging.info(f"Reading flows from: {input_csv}")
-    flows = read_flows(input_csv)
+    try:
+        # Check if file is empty before reading
+        if not os.path.isfile(input_csv) or os.path.getsize(input_csv) == 0:
+            print_usage()
+            logging.error("Input file is empty or does not exist.")
+            sys.exit(1)
+        flows = read_flows(input_csv)
+    except Exception as e:
+        print_usage()
+        logging.error(f"Error reading input file: {e}")
+        sys.exit(1)
     if not flows:
+        print_usage()
         logging.error("No flows found in the input file.")
         sys.exit(1)
 
@@ -243,6 +263,7 @@ def main() -> None:
                 f.write(mermaid_diagram)
             logging.info(f"Mermaid diagram written to {output_file}")
         except Exception as e:
+            print_usage()
             logging.error(f"Failed to write output file: {e}")
             sys.exit(1)
     else:
