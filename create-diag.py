@@ -109,6 +109,7 @@ def print_summary_table(summary: Dict[str, Dict[str, list[str]]]) -> None:
 def generate_mermaid(flows: List[Tuple[str, str]]) -> str:
     """
     Generate a Mermaid flowchart from a list of flows, grouping servers in subgraphs by function and data center.
+    If the number of nodes of any type in a data center is greater than 5, collapse them into a single node labeled with the function.
     Hostnames of the form P-xxx-yyyzzz are parsed for function and data center.
     Function codes (e.g., 'sys', 'idx') are mapped to human-readable names.
 
@@ -128,27 +129,41 @@ def generate_mermaid(flows: List[Tuple[str, str]]) -> str:
         nodes.add(to_node)
     # Group nodes by function and data center
     summary = summarize_hosts(nodes, function_map)
+    # Track collapsed nodes
+    collapsed_nodes = set()
+    collapsed_map = {}  # node -> collapsed node name
     lines = ["flowchart TD"]
     # Create subgraphs for each function and data center
     for function, dc_dict in summary.items():
         for data_center, hosts in dc_dict.items():
             subgraph_label = f"{function} - {data_center}"
-            lines.append(f"    subgraph {subgraph_label}")
-            for node in sorted(hosts):
-                label = node
-                parsed = parse_hostname(node)
-                if parsed:
-                    _, func, _ = parsed
-                    if func in function_map:
-                        label = f'{node} {function_map[func]}'
-                else:
-                    node_lower = node.lower()
-                    if 'sys' in node_lower:
-                        label = f'{node} Syslog'
-                    elif 'idx' in node_lower:
-                        label = f'{node} indexer'
-                lines.append(f'        "{node}"["{label}"]')
-            lines.append("    end")
+            if len(hosts) > 5:
+                # Collapse nodes into one
+                collapsed_node = f"{function}_{data_center}".replace(' ', '_')
+                collapsed_label = f"{function} ({data_center})"
+                lines.append(f'    "{collapsed_node}"["{collapsed_label}"]')
+                for node in hosts:
+                    collapsed_nodes.add(node)
+                    collapsed_map[node] = collapsed_node
+            else:
+                lines.append(f"    subgraph {subgraph_label}")
+                for node in sorted(hosts):
+                    label = node
+                    parsed = parse_hostname(node)
+                    if parsed:
+                        _, func, _ = parsed
+                        if func in function_map:
+                            label = f'{node} {function_map[func]}'
+                    else:
+                        node_lower = node.lower()
+                        if 'sys' in node_lower:
+                            label = f'{node} Syslog'
+                        elif 'idx' in node_lower:
+                            label = f'{node} indexer'
+                        else:
+                            label = f'{node} host'
+                    lines.append(f'        "{node}"["{label}"]')
+                lines.append("    end")
     # Add nodes not matching the pattern to the main graph
     for node in sorted(nodes):
         if not parse_hostname(node):
@@ -158,10 +173,21 @@ def generate_mermaid(flows: List[Tuple[str, str]]) -> str:
                 label = f'{node} Syslog'
             elif 'idx' in node_lower:
                 label = f'{node} indexer'
+            else:
+                label = f'{node} host'
             lines.append(f'    "{node}"["{label}"]')
-    # Then define edges
+    # Then define edges, redirecting to collapsed nodes if needed
+    edge_set = set()
     for from_node, to_node in flows:
-        lines.append(f'    "{from_node}" --> "{to_node}"')
+        from_actual = collapsed_map.get(from_node, from_node)
+        to_actual = collapsed_map.get(to_node, to_node)
+        # Avoid self-loops for collapsed nodes
+        if from_actual == to_actual:
+            continue
+        edge = (from_actual, to_actual)
+        if edge not in edge_set:
+            lines.append(f'    "{from_actual}" --> "{to_actual}"')
+            edge_set.add(edge)
     return '\n'.join(lines)
 
 
