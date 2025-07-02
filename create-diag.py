@@ -2,7 +2,7 @@
 Script to generate a Mermaid diagram from a CSV file containing 'from' and 'to' node flows.
 
 Usage:
-    python create-diag.py [input_csv] [output_file]
+    python create-diag.py [input_csv] [output_file] [collapse_threshold]
 If output_file is omitted, the diagram is printed to stdout.
 """
 import csv
@@ -106,15 +106,16 @@ def print_summary_table(summary: Dict[str, Dict[str, list[str]]]) -> None:
     print()
 
 
-def generate_mermaid(flows: List[Tuple[str, str]]) -> str:
+def generate_mermaid(flows: List[Tuple[str, str]], collapse_threshold: int = 5) -> str:
     """
     Generate a Mermaid flowchart from a list of flows, grouping servers in subgraphs by function and data center.
-    If the number of nodes of any type in a data center is greater than 5, collapse them into a single node labeled with the function.
+    If the number of nodes of any type in a data center is greater than collapse_threshold, collapse them into a single node labeled with the function.
     Hostnames of the form P-xxx-yyyzzz are parsed for function and data center.
     Function codes (e.g., 'sys', 'idx') are mapped to human-readable names.
 
     Args:
         flows (List[Tuple[str, str]]): List of (from, to) node pairs.
+        collapse_threshold (int): Number of nodes above which to collapse into one node.
 
     Returns:
         str: Mermaid diagram as a string.
@@ -137,7 +138,7 @@ def generate_mermaid(flows: List[Tuple[str, str]]) -> str:
     for function, dc_dict in summary.items():
         for data_center, hosts in dc_dict.items():
             subgraph_label = f"{function} - {data_center}"
-            if len(hosts) > 5:
+            if len(hosts) > collapse_threshold:
                 # Collapse nodes into one
                 collapsed_node = f"{function}_{data_center}".replace(' ', '_')
                 collapsed_label = f"{function} ({data_center})"
@@ -191,13 +192,42 @@ def generate_mermaid(flows: List[Tuple[str, str]]) -> str:
     return '\n'.join(lines)
 
 
+def print_usage() -> None:
+    """
+    Print usage message for the script.
+    """
+    print(
+        """
+Usage: python create-diag.py [input_csv] [output_file] [collapse_threshold]
+
+Arguments:
+  input_csv           Path to the CSV file (default: from_to.csv)
+  output_file         Path to output file (default: stdout)
+  collapse_threshold  Number of hosts to trigger collapsing (default: 5)
+        """
+    )
+
+
 def main() -> None:
     """
     Main function to read CSV and output Mermaid diagram.
+    Accepts an optional collapse threshold argument.
     """
     setup_logging()
+    if any(arg in ("-h", "--help") for arg in sys.argv):
+        print_usage()
+        sys.exit(0)
     input_csv: str = sys.argv[1] if len(sys.argv) > 1 else os.getenv('FROM_TO_CSV', 'from_to.csv')
     output_file: Optional[str] = sys.argv[2] if len(sys.argv) > 2 else None
+    try:
+        collapse_threshold: int = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+    except ValueError:
+        print_usage()
+        logging.error("Collapse threshold must be an integer.")
+        sys.exit(1)
+    if len(sys.argv) > 4:
+        print_usage()
+        sys.exit(1)
 
     logging.info(f"Reading flows from: {input_csv}")
     flows = read_flows(input_csv)
@@ -205,7 +235,7 @@ def main() -> None:
         logging.error("No flows found in the input file.")
         sys.exit(1)
 
-    mermaid_diagram = generate_mermaid(flows)
+    mermaid_diagram = generate_mermaid(flows, collapse_threshold=collapse_threshold)
 
     if output_file:
         try:
