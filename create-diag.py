@@ -9,7 +9,8 @@ import csv
 import logging
 import os
 import sys
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
+from collections import defaultdict
 
 
 def setup_logging() -> None:
@@ -50,11 +51,66 @@ def read_flows(csv_path: str) -> List[Tuple[str, str]]:
     return flows
 
 
+def parse_hostname(hostname: str) -> Optional[Tuple[str, str, str]]:
+    """
+    Parse a hostname of the form P-xxx-yyyzzz.
+
+    Args:
+        hostname (str): The hostname string.
+
+    Returns:
+        Optional[Tuple[str, str, str]]: (data_center, function, serial) or None if not matching.
+    """
+    import re
+    match = re.match(r"p-([a-z]+)-([a-z]+)(\d+)", hostname, re.IGNORECASE)
+    if match:
+        data_center, function, serial = match.groups()
+        return data_center, function, serial
+    return None
+
+
+def summarize_hosts(nodes: set[str], function_map: Dict[str, str]) -> Dict[str, Dict[str, list[str]]]:
+    """
+    Group hostnames by function and data center.
+
+    Args:
+        nodes (set[str]): Set of node names.
+        function_map (Dict[str, str]): Mapping of function codes to human-readable names.
+
+    Returns:
+        Dict[str, Dict[str, list[str]]]: {function: {data_center: [hostnames]}}
+    """
+    summary: Dict[str, Dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    for node in nodes:
+        parsed = parse_hostname(node)
+        if parsed:
+            data_center, function, _ = parsed
+            function_label = function_map.get(function, function)
+            summary[function_label][data_center].append(node)
+    return summary
+
+
+def print_summary_table(summary: Dict[str, Dict[str, list[str]]]) -> None:
+    """
+    Print a summary table grouping servers by function and data center.
+
+    Args:
+        summary (Dict[str, Dict[str, list[str]]]): Grouped hostnames.
+    """
+    print("\nServer Grouping by Function and Data Center:")
+    print("Function      Data Center      Hostnames")
+    print("----------------------------------------------")
+    for function, dc_dict in summary.items():
+        for data_center, hosts in dc_dict.items():
+            print(f"{function:<13} {data_center:<15} {', '.join(hosts)}")
+    print()
+
+
 def generate_mermaid(flows: List[Tuple[str, str]]) -> str:
     """
-    Generate a Mermaid flowchart from a list of flows, defining all unique nodes first with labels.
-    If a node name contains 'sys' (case-insensitive), label it 'Syslog'.
-    If it contains 'idx' (case-insensitive), label it 'indexer'.
+    Generate a Mermaid flowchart from a list of flows, grouping servers in subgraphs by function and data center.
+    Hostnames of the form P-xxx-yyyzzz are parsed for function and data center.
+    Function codes (e.g., 'sys', 'idx') are mapped to human-readable names.
 
     Args:
         flows (List[Tuple[str, str]]): List of (from, to) node pairs.
@@ -62,20 +118,47 @@ def generate_mermaid(flows: List[Tuple[str, str]]) -> str:
     Returns:
         str: Mermaid diagram as a string.
     """
+    function_map = {
+        'sysk': 'Syslog koncernet',
+        'idx': 'Indexer',
+    }
     nodes = set()
     for from_node, to_node in flows:
         nodes.add(from_node)
         nodes.add(to_node)
-    lines = ["graph TD"]
-    # Define all nodes first with labels if applicable
+    # Group nodes by function and data center
+    summary = summarize_hosts(nodes, function_map)
+    lines = ["flowchart TD"]
+    # Create subgraphs for each function and data center
+    for function, dc_dict in summary.items():
+        for data_center, hosts in dc_dict.items():
+            subgraph_label = f"{function} - {data_center}"
+            lines.append(f"    subgraph {subgraph_label}")
+            for node in sorted(hosts):
+                label = node
+                parsed = parse_hostname(node)
+                if parsed:
+                    _, func, _ = parsed
+                    if func in function_map:
+                        label = f'{node} {function_map[func]}'
+                else:
+                    node_lower = node.lower()
+                    if 'sys' in node_lower:
+                        label = f'{node} Syslog'
+                    elif 'idx' in node_lower:
+                        label = f'{node} indexer'
+                lines.append(f'        "{node}"["{label}"]')
+            lines.append("    end")
+    # Add nodes not matching the pattern to the main graph
     for node in sorted(nodes):
-        label = node
-        node_lower = node.lower()
-        if 'sys' in node_lower:
-            label = f'{node} Syslog'
-        elif 'idx' in node_lower:
-            label = f'{node} indexer'
-        lines.append(f'    "{node}"["{label}"]')
+        if not parse_hostname(node):
+            label = node
+            node_lower = node.lower()
+            if 'sys' in node_lower:
+                label = f'{node} Syslog'
+            elif 'idx' in node_lower:
+                label = f'{node} indexer'
+            lines.append(f'    "{node}"["{label}"]')
     # Then define edges
     for from_node, to_node in flows:
         lines.append(f'    "{from_node}" --> "{to_node}"')
