@@ -131,6 +131,13 @@ def generate_mermaid(flows: List[Tuple[str, str]], collapse_threshold: int = 5) 
         nodes.add(to_node)
     # Group nodes by function and data center
     summary = summarize_hosts(nodes, function_map)
+    # Add grouping for 'host' nodes (not matching pattern)
+    host_group: Dict[str, list[str]] = defaultdict(list)
+    for node in nodes:
+        if not parse_hostname(node):
+            host_group['host'].append(node)
+    if host_group:
+        summary['host'] = host_group
     # Track collapsed nodes
     collapsed_nodes = set()
     collapsed_map = {}  # node -> collapsed node name
@@ -142,7 +149,7 @@ def generate_mermaid(flows: List[Tuple[str, str]], collapse_threshold: int = 5) 
             if len(hosts) > collapse_threshold:
                 # Collapse nodes into one
                 collapsed_node = f"{function}_{data_center}".replace(' ', '_')
-                collapsed_label = f"{function} ({data_center})"
+                collapsed_label = f"{function.capitalize()} ({data_center})"
                 lines.append(f'    "{collapsed_node}"["{collapsed_label}"]')
                 for node in hosts:
                     collapsed_nodes.add(node)
@@ -166,18 +173,6 @@ def generate_mermaid(flows: List[Tuple[str, str]], collapse_threshold: int = 5) 
                             label = f'{node} host'
                     lines.append(f'        "{node}"["{label}"]')
                 lines.append("    end")
-    # Add nodes not matching the pattern to the main graph
-    for node in sorted(nodes):
-        if not parse_hostname(node):
-            label = node
-            node_lower = node.lower()
-            if 'sys' in node_lower:
-                label = f'{node} Syslog'
-            elif 'idx' in node_lower:
-                label = f'{node} indexer'
-            else:
-                label = f'{node} host'
-            lines.append(f'    "{node}"["{label}"]')
     # Then define edges, redirecting to collapsed nodes if needed
     edge_set = set()
     for from_node, to_node in flows:
